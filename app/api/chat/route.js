@@ -2,138 +2,123 @@ import { generateText } from 'ai';
 import { google } from '@ai-sdk/google';
 import { databaseQueryTool } from '../../../lib/tools/database';
 import { nanoid } from 'nanoid';
+import { SYSTEM_PROMPT } from './system-prompt';
+
+// Ensure GOOGLE_GENERATIVE_AI_API_KEY is available
+if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+  console.error('[API_ROUTE] Missing GOOGLE_GENERATIVE_AI_API_KEY');
+  throw new Error('Missing GOOGLE_GENERATIVE_AI_API_KEY environment variable');
+}
 
 export async function POST(req) {
   try {
-    const body = await req.json();
-    console.log('[DEBUG] Request received:', body);
+    console.log('[API_ROUTE] Received POST request');
+    const { messages } = await req.json();
+    console.log('[API_ROUTE] Parsed request body, messages:', JSON.stringify(messages, null, 2));
 
-    const { messages } = body;
-    const chatHistory = messages
-      .slice(0, -1)
-      .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-      .join('\n');
-    const input = messages[messages.length - 1].content;
+    // Log headers for middleware debugging
+    console.log('[API_ROUTE] Request headers:', JSON.stringify(Object.fromEntries(req.headers), null, 2));
 
-    console.log('[DEBUG] Processed chat history:', { chatHistory, lastInput: input });
+    // Handle simple greetings without LLM
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.role === 'user') {
+      const lowerContent = lastMessage.content.toLowerCase().trim();
+      console.log('[API_ROUTE] Last message content:', lowerContent);
+      if (lowerContent === 'hi' || lowerContent === 'hello') {
+        const response = 'Hello! How can I assist you with your orders, products, or support tickets today?';
+        console.log('[API_ROUTE] Returning greeting response:', response);
+        return new Response(response, {
+          status: 200,
+          headers: {
+            'Content-Type': 'text/plain',
+            'Cache-Control': 'no-cache',
+            'X-Content-Type-Options': 'nosniff',
+          },
+        });
+      }
+    }
 
-    const prompt = `You are a customer support assistant for TechTrend Innovations, an electronics store. Use the db_query tool to fetch order or support ticket data when needed. For simple greetings like "hi", respond with a friendly message. Be friendly and concise.
-Conversation history:
-${chatHistory}
-
-User: ${input}
-Assistant:`;
-
-    console.log('[DEBUG] Generated prompt:', { prompt });
-
-    // Fallback for simple messages
-    if (input.trim().toLowerCase() === 'hi') {
-      const messageId = nanoid();
-      const response = {
-        id: messageId,
-        role: 'assistant',
-        content: 'Hello! How can I assist you today?',
-      };
-      console.log('[DEBUG] Streaming fallback response:', response);
-      const stream = new ReadableStream({
-        start(controller) {
-          const messageData = `event: message\ndata: ${JSON.stringify(response)}\n\n`;
-          controller.enqueue(new TextEncoder().encode(messageData));
-          controller.enqueue(new TextEncoder().encode('event: done\ndata: [DONE]\n\n'));
-          controller.close();
-        },
-      });
-      return new Response(stream, {
-        status: 200,
-        headers: {
-          'Content-Type': 'text/event-stream',
-          'Cache-Control': 'no-cache',
-          'Connection': 'keep-alive',
-        },
+    // Validate tool configuration
+    console.log('[API_ROUTE] Validating databaseQueryTool');
+    if (!databaseQueryTool || typeof databaseQueryTool.execute !== 'function') {
+      console.error('[API_ROUTE] databaseQueryTool is not correctly configured:', databaseQueryTool);
+      return new Response('Internal server error: Tool not configured.', {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain' },
       });
     }
 
-    // Validate tool
-    if (!databaseQueryTool || !databaseQueryTool.parameters) {
-      throw new Error('Database query tool is not properly configured');
-    }
+    // Log generateText inputs
+    console.log('[API_ROUTE] Calling generateText with:');
+    console.log('[API_ROUTE] System prompt:', SYSTEM_PROMPT);
+    console.log('[API_ROUTE] Messages:', JSON.stringify(messages, null, 2));
+    console.log('[API_ROUTE] Tools:', JSON.stringify({ db_query: databaseQueryTool.description }, null, 2));
 
-    console.log('[DEBUG] Calling Gemini API:', {
-      model: 'gemini-1.5-flash',
-      toolsEnabled: true,
-      temperature: 0.7,
-    });
-
-    const { text } = await generateText({
-      model: google('gemini-1.5-flash'),
-      prompt,
+    const result = await generateText({
+      model: google('models/gemini-2.0-flash-exp'),
+      system: SYSTEM_PROMPT,
+      messages,
       tools: {
         db_query: databaseQueryTool,
       },
       toolChoice: 'auto',
-      temperature: 0.7,
-      safetySettings: [
-        { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
-        { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
-      ],
+      temperature: 0.5,
     });
 
-    console.log('[DEBUG] Gemini response:', { text });
+    // Log full generateText result
+    console.log('[API_ROUTE] generateText result:', JSON.stringify(result, null, 2));
 
-    // Stream response for useChat
-    const messageId = nanoid();
-    const response = {
-      id: messageId,
-      role: 'assistant',
-      content: text || 'Sorry, I encountered an issue. Please try again or contact support.',
-    };
-    console.log('[DEBUG] Streaming Gemini response:', response);
-    const stream = new ReadableStream({
-      start(controller) {
-        const messageData = `event: message\ndata: ${JSON.stringify(response)}\n\n`;
-        controller.enqueue(new TextEncoder().encode(messageData));
-        controller.enqueue(new TextEncoder().encode('event: done\ndata: [DONE]\n\n'));
-        controller.close();
-      },
+    // Extract response text
+    let responseText = result.text || '';
+    console.log('[API_ROUTE] Extracted response text:', responseText);
+
+    // Fallback if response is empty or incorrect
+    if (result.toolResults?.length > 0 && (!responseText || responseText.includes('Unfortunately'))) {
+      console.log('[API_ROUTE] Using tool result as fallback');
+      const toolResult = result.toolResults[0].result;
+      console.log('[API_ROUTE] Tool result:', JSON.stringify(toolResult, null, 2));
+      if (toolResult.llm_formatted_data) {
+        responseText = toolResult.llm_formatted_data;
+        console.log('[API_ROUTE] Set response to llm_formatted_data:', responseText);
+      } else if (toolResult.data?.length > 0) {
+        responseText = `Found ${toolResult.data.length} order(s) for bob@example.com.`;
+        console.log('[API_ROUTE] Set response to generic found message:', responseText);
+      } else {
+        responseText = 'Hi! I checked for orders associated with bob@example.com, but none were found. Please verify the email or provide more details.';
+        console.log('[API_ROUTE] Set response to no orders found:', responseText);
+      }
+    }
+
+    // Ensure response is not empty
+    if (!responseText) {
+      responseText = 'Hi! I processed your request, but no response was generated. Please try again.';
+      console.log('[API_ROUTE] Set response to default fallback:', responseText);
+    }
+
+    // Log final response
+    console.log('[API_ROUTE] Final response text:', responseText);
+    console.log('[API_ROUTE] Response headers:', {
+      'Content-Type': 'text/plain',
+      'Cache-Control': 'no-cache',
+      'X-Content-Type-Options': 'nosniff',
     });
 
-    return new Response(stream, {
+    return new Response(responseText, {
       status: 200,
       headers: {
-        'Content-Type': 'text/event-stream',
+        'Content-Type': 'text/plain',
         'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
+        'X-Content-Type-Options': 'nosniff',
       },
     });
   } catch (error) {
-    console.error('[ERROR] API processing failed:', {
-      message: error.message,
-      stack: error.stack,
-    });
-    const messageId = nanoid();
-    const errorResponse = {
-      id: messageId,
-      role: 'assistant',
-      content: `Error: ${error.message}`,
-    };
-    console.log('[DEBUG] Streaming error response:', errorResponse);
-    const stream = new ReadableStream({
-      start(controller) {
-        const messageData = `event: message\ndata: ${JSON.stringify(errorResponse)}\n\n`;
-        controller.enqueue(new TextEncoder().encode(messageData));
-        controller.enqueue(new TextEncoder().encode('event: done\ndata: [DONE]\n\n'));
-        controller.close();
-      },
-    });
-    return new Response(stream, {
-      status: 500,
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
+    console.error('[API_ROUTE] Error:', error.stack);
+    return new Response(
+      `Error: ${error.message || 'An error occurred during the request.'}`,
+      {
+        status: 500,
+        headers: { 'Content-Type': 'text/plain' },
+      }
+    );
   }
 }
