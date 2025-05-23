@@ -1,7 +1,7 @@
-````markdown name=README.md
 # Vercel AI SDK E-commerce Chatbot
 
 A **production-ready, AI-powered e-commerce support chatbot** built with:
+
 - **Vercel AI SDK** (streaming, tools, edge-ready)
 - **Google Gemini** (LLM)
 - **Prisma** + **Neon DB** (type-safe, serverless Postgres)
@@ -48,6 +48,7 @@ npm install
 - **Google Gemini API Key**:  
   Get your key from [Google AI Studio](https://aistudio.google.com/app/apikey)  
   Add to `.env.local`:
+
   ```
   GOOGLE_GENERATIVE_AI_API_KEY=your-google-api-key
   ```
@@ -55,6 +56,7 @@ npm install
 - **Neon DB (Postgres) connection**:  
   Get your connection string from [neon.tech](https://neon.tech)  
   Add also to `.env.local`:
+
   ```
   DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DB
   ```
@@ -152,4 +154,3 @@ MIT
 ---
 
 ## ⭐️ If this helped you, star the repo!
-````
