@@ -1,5 +1,6 @@
 'use client';
 import { useState, useEffect, useRef, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Loader2, Send, RotateCcw, X, ShoppingCart, Star, Search } from 'lucide-react';
 import { toast, Toaster } from 'sonner';
@@ -7,6 +8,12 @@ import { nanoid } from 'nanoid';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeSanitize from 'rehype-sanitize';
+
+// Import UI components
+const UserCard = dynamic(() => import('./components/UserCard'), { ssr: false });
+const ProductCard = dynamic(() => import('./components/ProductCard'), { ssr: false });
+const OrderCard = dynamic(() => import('./components/OrderCard'), { ssr: false });
+const TicketCard = dynamic(() => import('./components/TicketCard'), { ssr: false });
 
 // Product data
 const products = [
@@ -70,26 +77,27 @@ export default function Home() {
       console.log('[UI] Response received, status:', response.status);
       console.log('[UI] Response headers:', JSON.stringify(Object.fromEntries(response.headers), null, 2));
 
-      const text = await response.text();
-      console.log('[UI] Raw response text:', text);
+      const responseData = await response.json().catch(() => ({}));
+      console.log('[UI] Parsed response data:', responseData);
 
       if (!response.ok) {
-        console.error('[UI] Response error, status:', response.status, 'text:', text);
+        console.error('[UI] Response error, status:', response.status, 'data:', responseData);
         toast.error('Failed to process chat response.');
         setMessages((prev) => [
           ...prev,
           {
             id: nanoid(),
             role: 'assistant',
-            content: `# Error\nError: ${text || 'Failed to process request.'}`,
+            content: `# Error\nError: ${responseData.error || response.statusText || 'Failed to process request.'}`,
+            ui_components: []
           },
         ]);
         setIsLoading(false);
         return;
       }
 
-      // Clean potential prefixes
-      const cleanedText = text.replace(/^f:/, '').replace(/^0:/g, '').trim();
+      const responseText = responseData.text || '';
+      const cleanedText = responseText.replace(/^f:/, '').replace(/^0:/g, '').trim();
       console.log('[UI] Cleaned response text:', cleanedText);
 
       if (!cleanedText) {
@@ -101,6 +109,7 @@ export default function Home() {
             id: nanoid(),
             role: 'assistant',
             content: '# Error\nReceived an empty response. Please try again.',
+            ui_components: []
           },
         ]);
       } else {
@@ -110,9 +119,10 @@ export default function Home() {
             id: nanoid(),
             role: 'assistant',
             content: cleanedText,
+            ui_components: responseData.ui_components || []
           },
         ]);
-        console.log('[UI] Added response to messages:', cleanedText);
+        console.log('[UI] Added response to messages:', { text: cleanedText, ui_components: responseData.ui_components });
       }
     } catch (error) {
       console.error('[UI] Fetch error:', error.stack);
@@ -142,37 +152,67 @@ export default function Home() {
     toast.success('Chat history reset!');
   };
 
+  // Component mapping for UI components
+  const componentMap = {
+    UserCard,
+    ProductCard,
+    OrderCard,
+    TicketCard
+  };
+
   // Render message content
   const renderMessageContent = (message) => {
     console.log('[UI] Rendering message:', JSON.stringify(message, null, 2));
-    if (!message.content) {
-      console.warn('[UI] Message has no content:', message.id);
+    
+    const renderContent = () => {
+      if (!message.content) {
+        console.warn('[UI] Message has no content:', message.id);
+        return (
+          <div className="text-gray-500 dark:text-gray-400 text-sm">
+            No response content available.
+          </div>
+        );
+      }
+      
       return (
-        <div className="text-gray-500 dark:text-gray-400 text-sm">
-          No response content available.
+        <div className="prose dark:prose-invert prose-sm max-w-none">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeSanitize]}
+            components={{
+              h1: ({ node, ...props }) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
+              h2: ({ node, ...props }) => <h2 className="text-lg font-semibold mt-3 mb-1" {...props} />,
+              p: ({ node, ...props }) => <p className="mb-2" {...props} />,
+              ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2" {...props} />,
+              li: ({ node, ...props }) => <li className="mb-1" {...props} />,
+              table: ({ node, ...props }) => (
+                <div className="overflow-x-auto">
+                  <table className="border-collapse border border-gray-300 dark:border-gray-600 mb-2 w-full" {...props} />
+                </div>
+              ),
+              th: ({ node, ...props }) => <th className="border border-gray-300 dark:border-gray-600 p-2 bg-gray-100 dark:bg-gray-700" {...props} />,
+              td: ({ node, ...props }) => <td className="border border-gray-300 dark:border-gray-600 p-2" {...props} />,
+              code: ({ node, ...props }) => <code className="bg-gray-100 dark:bg-gray-800 rounded px-1 py-0.5" {...props} />,
+              pre: ({ node, ...props }) => <pre className="bg-gray-100 dark:bg-gray-800 rounded p-2 overflow-x-auto text-sm" {...props} />,
+            }}
+          >
+            {message.content}
+          </ReactMarkdown>
         </div>
       );
-    }
+    };
+
     return (
-      <div className="prose dark:prose-invert prose-sm max-w-none">
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          rehypePlugins={[rehypeSanitize]}
-          components={{
-            h1: ({ node, ...props }) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
-            h2: ({ node, ...props }) => <h2 className="text-lg font-semibold mt-3 mb-1" {...props} />,
-            p: ({ node, ...props }) => <p className="mb-2" {...props} />,
-            ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2" {...props} />,
-            li: ({ node, ...props }) => <li className="mb-1" {...props} />,
-            table: ({ node, ...props }) => <table className="border-collapse border border-gray-300 dark:border-gray-600 mb-2" {...props} />,
-            th: ({ node, ...props }) => <th className="border border-gray-300 dark:border-gray-600 p-2 bg-gray-100 dark:bg-gray-700" {...props} />,
-            td: ({ node, ...props }) => <td className="border border-gray-300 dark:border-gray-600 p-2" {...props} />,
-            code: ({ node, ...props }) => <code className="bg-gray-100 dark:bg-gray-800 rounded px-1 py-0.5" {...props} />,
-            pre: ({ node, ...props }) => <pre className="bg-gray-100 dark:bg-gray-800 rounded p-2 overflow-x-auto" {...props} />,
-          }}
-        >
-          {message.content}
-        </ReactMarkdown>
+      <div className="space-y-4">
+        {renderContent()}
+        {message.ui_components?.map((comp, idx) => {
+          const Component = componentMap[comp.component];
+          if (!Component) {
+            console.warn(`[UI] Unknown component: ${comp.component}`);
+            return null;
+          }
+          return <Component key={idx} {...comp.props} />;
+        })}
       </div>
     );
   };
