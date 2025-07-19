@@ -519,9 +519,10 @@ export async function POST(req) {
         let lastError;
         const maxRetries = 2;
         let attempt = 0;
-      while (attempt <= maxRetries) {
-        attempt++;
-        lastError = null;
+        
+        while (attempt <= maxRetries) {
+          attempt++;
+          lastError = null;
         
         try {
           const model = google('gemini-1.5-flash');
