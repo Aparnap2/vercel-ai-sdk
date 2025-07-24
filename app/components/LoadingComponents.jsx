@@ -1,5 +1,7 @@
+"use client";
 // Enhanced loading components for progressive data display
-import { Loader2, Wifi, WifiOff } from 'lucide-react';
+import { Loader2, Wifi, WifiOff, Database, Search, Cpu, CheckCircle, AlertCircle } from 'lucide-react';
+import { motion } from 'framer-motion';
 
 // Streaming indicator component
 export function StreamingIndicator({ isStreaming = true, message = "Loading..." }) {
@@ -187,6 +189,246 @@ export function BatchLoadingIndicator({
   );
 }
 
+// Enhanced streaming status indicator with tool-specific icons
+export function StreamingStatusIndicator({ 
+  status = 'idle', 
+  currentStep = null, 
+  totalSteps = null,
+  toolType = null,
+  className = '' 
+}) {
+  const statusConfig = {
+    idle: { color: 'gray', text: 'Ready', icon: null },
+    connecting: { color: 'blue', text: 'Connecting...', icon: 'connecting' },
+    streaming: { color: 'green', text: 'Streaming', icon: 'streaming' },
+    processing: { color: 'yellow', text: 'Processing', icon: 'processing' },
+    querying: { color: 'blue', text: 'Querying database', icon: 'database' },
+    searching: { color: 'purple', text: 'Searching', icon: 'search' },
+    error: { color: 'red', text: 'Error', icon: 'error' },
+    complete: { color: 'green', text: 'Complete', icon: 'complete' }
+  };
+
+  const config = statusConfig[status] || statusConfig.idle;
+
+  const getStatusIcon = () => {
+    // Tool-specific icons
+    if (toolType === 'database') return <Database className="w-3 h-3 animate-pulse text-blue-500" />;
+    if (toolType === 'search') return <Search className="w-3 h-3 animate-pulse text-purple-500" />;
+    if (toolType === 'processing') return <Cpu className="w-3 h-3 animate-pulse text-yellow-500" />;
+
+    // Status-specific icons
+    switch (config.icon) {
+      case 'connecting':
+        return <div className="animate-pulse w-2 h-2 bg-blue-500 rounded-full" />;
+      case 'streaming':
+        return (
+          <div className="flex space-x-1">
+            {[0, 1, 2].map((i) => (
+              <motion.div
+                key={i}
+                className="w-1 h-3 bg-green-500 rounded-full"
+                animate={{ scaleY: [1, 1.5, 1] }}
+                transition={{
+                  duration: 0.8,
+                  repeat: Infinity,
+                  delay: i * 0.2
+                }}
+              />
+            ))}
+          </div>
+        );
+      case 'processing':
+        return <Loader2 className="w-3 h-3 animate-spin text-yellow-500" />;
+      case 'database':
+        return <Database className="w-3 h-3 animate-pulse text-blue-500" />;
+      case 'search':
+        return <Search className="w-3 h-3 animate-pulse text-purple-500" />;
+      case 'error':
+        return <AlertCircle className="w-3 h-3 text-red-500" />;
+      case 'complete':
+        return <CheckCircle className="w-3 h-3 text-green-500" />;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <motion.div 
+      className={`flex items-center space-x-2 ${className}`}
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.2 }}
+    >
+      <div className="flex items-center justify-center w-4 h-4">
+        {getStatusIcon()}
+      </div>
+      <span className={`text-sm text-${config.color}-600 dark:text-${config.color}-400`}>
+        {config.text}
+      </span>
+      {currentStep && totalSteps && (
+        <span className="text-xs text-gray-500 dark:text-gray-400">
+          ({currentStep}/{totalSteps})
+        </span>
+      )}
+    </motion.div>
+  );
+}
+
+// Progressive loading dots with enhanced animations
+export function ProgressiveDots({ 
+  count = 3, 
+  size = 'sm', 
+  color = 'blue',
+  className = '' 
+}) {
+  const sizeClasses = {
+    xs: 'w-1 h-1',
+    sm: 'w-2 h-2',
+    md: 'w-3 h-3',
+    lg: 'w-4 h-4'
+  };
+
+  return (
+    <div className={`flex space-x-1 ${className}`}>
+      {Array.from({ length: count }).map((_, i) => (
+        <motion.div
+          key={i}
+          className={`${sizeClasses[size]} bg-${color}-500 rounded-full`}
+          animate={{
+            scale: [1, 1.2, 1],
+            opacity: [0.5, 1, 0.5]
+          }}
+          transition={{
+            duration: 1.2,
+            repeat: Infinity,
+            delay: i * 0.2
+          }}
+        />
+      ))}
+    </div>
+  );
+}
+
+// Enhanced card skeleton with streaming progress
+export function EnhancedCardSkeleton({ 
+  type = 'default', 
+  showProgress = false,
+  progressText = null,
+  streamingState = null,
+  className = '' 
+}) {
+  const getSkeletonContent = () => {
+    switch (type) {
+      case 'user':
+        return (
+          <div className="flex items-start space-x-3">
+            <motion.div 
+              className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-full"
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1.5, repeat: Infinity }}
+            />
+            <div className="flex-1 space-y-2">
+              <motion.div 
+                className="h-4 bg-gray-200 dark:bg-gray-700 rounded"
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 1.5, repeat: Infinity, delay: 0.1 }}
+              />
+              <div className="space-y-2">
+                <motion.div 
+                  className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-3/4"
+                  animate={{ opacity: [0.5, 1, 0.5] }}
+                  transition={{ duration: 1.5, repeat: Infinity, delay: 0.2 }}
+                />
+                <motion.div 
+                  className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-1/2"
+                  animate={{ opacity: [0.5, 1, 0.5] }}
+                  transition={{ duration: 1.5, repeat: Infinity, delay: 0.3 }}
+                />
+              </div>
+            </div>
+          </div>
+        );
+      
+      case 'order':
+        return (
+          <div className="space-y-3">
+            <div className="flex justify-between items-start">
+              <motion.div 
+                className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-24"
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 1.5, repeat: Infinity }}
+              />
+              <motion.div 
+                className="h-6 bg-gray-200 dark:bg-gray-700 rounded-full w-16"
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 1.5, repeat: Infinity, delay: 0.1 }}
+              />
+            </div>
+            <div className="space-y-2">
+              <motion.div 
+                className="h-3 bg-gray-200 dark:bg-gray-700 rounded"
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 1.5, repeat: Infinity, delay: 0.2 }}
+              />
+              <motion.div 
+                className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-2/3"
+                animate={{ opacity: [0.5, 1, 0.5] }}
+                transition={{ duration: 1.5, repeat: Infinity, delay: 0.3 }}
+              />
+            </div>
+          </div>
+        );
+      
+      default:
+        return (
+          <div className="space-y-3">
+            <motion.div 
+              className="h-4 bg-gray-200 dark:bg-gray-700 rounded w-3/4"
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1.5, repeat: Infinity }}
+            />
+            <motion.div 
+              className="h-3 bg-gray-200 dark:bg-gray-700 rounded"
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1.5, repeat: Infinity, delay: 0.1 }}
+            />
+            <motion.div 
+              className="h-3 bg-gray-200 dark:bg-gray-700 rounded w-2/3"
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1.5, repeat: Infinity, delay: 0.2 }}
+            />
+          </div>
+        );
+    }
+  };
+
+  return (
+    <motion.div 
+      className={`max-w-sm mx-auto p-4 border rounded-lg bg-white dark:bg-gray-800 shadow-md ${className}`}
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      transition={{ duration: 0.2 }}
+    >
+      {(showProgress || streamingState) && (
+        <div className="mb-3 flex items-center space-x-2">
+          <ProgressiveDots count={3} size="sm" color="blue" />
+          {progressText && (
+            <span className="text-xs text-gray-500 dark:text-gray-400">{progressText}</span>
+          )}
+          {streamingState?.currentTool && (
+            <StreamingStatusIndicator 
+              status="processing" 
+              toolType={streamingState.currentTool}
+              className="ml-2"
+            />
+          )}
+        </div>
+      )}
+      {getSkeletonContent()}
+    </motion.div>
+  );
+}
+
 // Export all components
 export default {
   StreamingIndicator,
@@ -194,5 +436,8 @@ export default {
   ConnectionStatus,
   EnhancedSkeleton,
   DataLoadingProgress,
-  BatchLoadingIndicator
+  BatchLoadingIndicator,
+  StreamingStatusIndicator,
+  ProgressiveDots,
+  EnhancedCardSkeleton
 };

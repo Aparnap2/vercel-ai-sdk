@@ -49,7 +49,7 @@ export default function Home() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Handle form submission
+  // Handle form submission with streaming support
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
@@ -64,6 +64,19 @@ export default function Home() {
     setInput('');
     setIsLoading(true);
 
+    // Add a placeholder assistant message that will be updated
+    const assistantMessageId = nanoid();
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: assistantMessageId,
+        role: 'assistant',
+        content: '',
+        ui_components: [],
+        isStreaming: true
+      }
+    ]);
+
     try {
       console.log('[UI] Sending request to /api/chat');
       const response = await fetch('/api/chat', {
@@ -77,63 +90,236 @@ export default function Home() {
       console.log('[UI] Response received, status:', response.status);
       console.log('[UI] Response headers:', JSON.stringify(Object.fromEntries(response.headers), null, 2));
 
-      const responseData = await response.json().catch(() => ({}));
-      console.log('[UI] Parsed response data:', responseData);
-
       if (!response.ok) {
-        console.error('[UI] Response error, status:', response.status, 'data:', responseData);
+        const errorData = await response.json().catch(() => ({}));
+        console.error('[UI] Response error, status:', response.status, 'data:', errorData);
         toast.error('Failed to process chat response.');
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nanoid(),
-            role: 'assistant',
-            content: `# Error\nError: ${responseData.error || response.statusText || 'Failed to process request.'}`,
-            ui_components: []
-          },
-        ]);
+        setMessages((prev) => 
+          prev.map(msg => 
+            msg.id === assistantMessageId 
+              ? {
+                  ...msg,
+                  content: `# Error\nError: ${errorData.error || response.statusText || 'Failed to process request.'}`,
+                  isStreaming: false
+                }
+              : msg
+          )
+        );
         setIsLoading(false);
         return;
       }
 
-      const responseText = responseData.text || '';
-      const cleanedText = responseText.replace(/^f:/, '').replace(/^0:/g, '').trim();
-      console.log('[UI] Cleaned response text:', cleanedText);
-
-      if (!cleanedText) {
-        console.warn('[UI] Empty response received');
-        toast.error('Empty response from server.');
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nanoid(),
-            role: 'assistant',
-            content: '# Error\nReceived an empty response. Please try again.',
-            ui_components: []
-          },
-        ]);
-      } else {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: nanoid(),
-            role: 'assistant',
-            content: cleanedText,
-            ui_components: responseData.ui_components || []
-          },
-        ]);
-        console.log('[UI] Added response to messages:', { text: cleanedText, ui_components: responseData.ui_components });
+      // Enhanced streaming response handler with better UI updates
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body reader available');
       }
+
+      const decoder = new TextDecoder();
+      let accumulatedContent = '';
+      let uiComponents = [];
+      let streamingState = {
+        isLoadingData: false,
+        currentTool: null,
+        progressInfo: null
+      };
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          console.log('[UI] Received enhanced streamUI chunk:', chunk);
+
+          // Parse streamUI data format with enhanced handling
+          const lines = chunk.split('\n');
+          for (const line of lines) {
+            if (line.trim() === '') continue;
+            
+            try {
+              // Handle streamUI data stream format with enhanced parsing
+              if (line.startsWith('0:')) {
+                // Text content from streamUI
+                const textData = line.substring(2);
+                let parsedText = '';
+                
+                try {
+                  // Try to parse as JSON first
+                  if (textData.startsWith('"') && textData.endsWith('"')) {
+                    parsedText = JSON.parse(textData);
+                  } else {
+                    parsedText = textData;
+                  }
+                } catch (jsonError) {
+                  // Fallback to raw text
+                  parsedText = textData;
+                }
+                
+                accumulatedContent += parsedText;
+                console.log('[UI] Accumulated text content:', parsedText);
+                
+              } else if (line.startsWith('1:')) {
+                // UI component from streamUI - enhanced handling
+                try {
+                  const componentData = JSON.parse(line.substring(2));
+                  console.log('[UI] Received enhanced UI component:', componentData);
+                  
+                  // Handle React Server Component data with better parsing
+                  if (componentData) {
+                    // Check if this is a streaming update or final component
+                    const isStreamingUpdate = componentData.type === 'streaming_update';
+                    const isProgressUpdate = componentData.type === 'progress_update';
+                    
+                    if (isProgressUpdate) {
+                      // Handle progress updates
+                      streamingState.progressInfo = componentData.data;
+                      console.log('[UI] Progress update:', componentData.data);
+                    } else if (isStreamingUpdate) {
+                      // Handle streaming updates - replace the last component
+                      streamingState.isLoadingData = componentData.loading || false;
+                      streamingState.currentTool = componentData.tool || null;
+                      
+                      if (uiComponents.length > 0) {
+                        uiComponents[uiComponents.length - 1] = {
+                          component: 'ServerCardWrapper',
+                          props: {
+                            type: componentData.componentType || 'generic',
+                            data: componentData.data,
+                            loading: componentData.loading || false,
+                            fallbackToMarkdown: true,
+                            streamingState: streamingState
+                          }
+                        };
+                      } else {
+                        uiComponents.push({
+                          component: 'ServerCardWrapper',
+                          props: {
+                            type: componentData.componentType || 'generic',
+                            data: componentData.data,
+                            loading: componentData.loading || false,
+                            fallbackToMarkdown: true,
+                            streamingState: streamingState
+                          }
+                        });
+                      }
+                    } else {
+                      // Regular component data - add new component
+                      uiComponents.push({
+                        component: 'ServerCardWrapper',
+                        props: {
+                          type: componentData.type || 'generic',
+                          data: componentData,
+                          loading: false,
+                          fallbackToMarkdown: true,
+                          streamingState: streamingState
+                        }
+                      });
+                    }
+                  }
+                } catch (componentParseError) {
+                  console.warn('[UI] Failed to parse enhanced UI component:', componentParseError, line);
+                  // Fallback: treat as raw component data
+                  uiComponents.push({
+                    component: 'ServerCardWrapper',
+                    props: {
+                      type: 'generic',
+                      data: { rawData: line.substring(2) },
+                      loading: false,
+                      fallbackToMarkdown: true
+                    }
+                  });
+                }
+              } else if (line.startsWith('2:')) {
+                // Tool call result or other data - enhanced handling
+                try {
+                  const toolData = JSON.parse(line.substring(2));
+                  console.log('[UI] Received enhanced tool data:', toolData);
+                  
+                  // Handle different types of tool data
+                  if (toolData.type === 'tool_start') {
+                    streamingState.currentTool = toolData.tool;
+                    streamingState.isLoadingData = true;
+                  } else if (toolData.type === 'tool_end') {
+                    streamingState.currentTool = null;
+                    streamingState.isLoadingData = false;
+                  } else if (toolData.type === 'error') {
+                    // Handle tool errors
+                    console.error('[UI] Tool error:', toolData.error);
+                    uiComponents.push({
+                      component: 'ErrorDisplay',
+                      props: {
+                        error: toolData.error,
+                        type: 'tool_error'
+                      }
+                    });
+                  }
+                } catch (toolParseError) {
+                  console.warn('[UI] Failed to parse enhanced tool result:', toolParseError, line);
+                }
+              } else if (line.startsWith('3:')) {
+                // Custom streaming data - for future extensions
+                try {
+                  const customData = JSON.parse(line.substring(2));
+                  console.log('[UI] Received custom streaming data:', customData);
+                  // Handle custom streaming data as needed
+                } catch (customParseError) {
+                  console.warn('[UI] Failed to parse custom streaming data:', customParseError);
+                }
+              }
+            } catch (parseError) {
+              console.warn('[UI] Failed to parse enhanced streaming chunk:', parseError, line);
+              // Continue processing other lines
+            }
+          }
+
+          // Enhanced message update with streaming state
+          setMessages((prev) => 
+            prev.map(msg => 
+              msg.id === assistantMessageId 
+                ? {
+                    ...msg,
+                    content: accumulatedContent,
+                    ui_components: uiComponents,
+                    isStreaming: true,
+                    streamingState: streamingState
+                  }
+                : msg
+            )
+          );
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      // Mark streaming as complete
+      setMessages((prev) => 
+        prev.map(msg => 
+          msg.id === assistantMessageId 
+            ? { ...msg, isStreaming: false }
+            : msg
+        )
+      );
+
+      console.log('[UI] StreamUI completed:', { 
+        content: accumulatedContent, 
+        uiComponents: uiComponents.length 
+      });
+
     } catch (error) {
       console.error('[UI] Fetch error:', error.stack);
       toast.error('Failed to process chat response.');
-      setMessages((prev) => [
-        {
-          id: nanoid(),
-          role: 'assistant',
-          content: '# Error\nSorry, there was an error processing your request. Please try again.',
-        },
-      ]);
+      setMessages((prev) => 
+        prev.map(msg => 
+          msg.id === assistantMessageId 
+            ? {
+                ...msg,
+                content: '# Error\nSorry, there was an error processing your request. Please try again.',
+                isStreaming: false
+              }
+            : msg
+        )
+      );
     } finally {
       setIsLoading(false);
     }
@@ -165,7 +351,7 @@ export default function Home() {
     console.log('[UI] Rendering message:', JSON.stringify(message, null, 2));
     
     const renderContent = () => {
-      if (!message.content) {
+      if (!message.content && !message.isStreaming) {
         console.warn('[UI] Message has no content:', message.id);
         return (
           <div className="text-gray-500 dark:text-gray-400 text-sm">
@@ -176,28 +362,48 @@ export default function Home() {
       
       return (
         <div className="prose dark:prose-invert prose-sm max-w-none">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            rehypePlugins={[rehypeSanitize]}
-            components={{
-              h1: ({ node, ...props }) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
-              h2: ({ node, ...props }) => <h2 className="text-lg font-semibold mt-3 mb-1" {...props} />,
-              p: ({ node, ...props }) => <p className="mb-2" {...props} />,
-              ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2" {...props} />,
-              li: ({ node, ...props }) => <li className="mb-1" {...props} />,
-              table: ({ node, ...props }) => (
-                <div className="overflow-x-auto">
-                  <table className="border-collapse border border-gray-300 dark:border-gray-600 mb-2 w-full" {...props} />
-                </div>
-              ),
-              th: ({ node, ...props }) => <th className="border border-gray-300 dark:border-gray-600 p-2 bg-gray-100 dark:bg-gray-700" {...props} />,
-              td: ({ node, ...props }) => <td className="border border-gray-300 dark:border-gray-600 p-2" {...props} />,
-              code: ({ node, ...props }) => <code className="bg-gray-100 dark:bg-gray-800 rounded px-1 py-0.5" {...props} />,
-              pre: ({ node, ...props }) => <pre className="bg-gray-100 dark:bg-gray-800 rounded p-2 overflow-x-auto text-sm" {...props} />,
-            }}
-          >
-            {message.content}
-          </ReactMarkdown>
+          {message.content && (
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm]}
+              rehypePlugins={[rehypeSanitize]}
+              components={{
+                h1: ({ node, ...props }) => <h1 className="text-xl font-bold mt-4 mb-2" {...props} />,
+                h2: ({ node, ...props }) => <h2 className="text-lg font-semibold mt-3 mb-1" {...props} />,
+                p: ({ node, ...props }) => <p className="mb-2" {...props} />,
+                ul: ({ node, ...props }) => <ul className="list-disc pl-5 mb-2" {...props} />,
+                li: ({ node, ...props }) => <li className="mb-1" {...props} />,
+                table: ({ node, ...props }) => (
+                  <div className="overflow-x-auto">
+                    <table className="border-collapse border border-gray-300 dark:border-gray-600 mb-2 w-full" {...props} />
+                  </div>
+                ),
+                th: ({ node, ...props }) => <th className="border border-gray-300 dark:border-gray-600 p-2 bg-gray-100 dark:bg-gray-700" {...props} />,
+                td: ({ node, ...props }) => <td className="border border-gray-300 dark:border-gray-600 p-2" {...props} />,
+                code: ({ node, ...props }) => <code className="bg-gray-100 dark:bg-gray-800 rounded px-1 py-0.5" {...props} />,
+                pre: ({ node, ...props }) => <pre className="bg-gray-100 dark:bg-gray-800 rounded p-2 overflow-x-auto text-sm" {...props} />,
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
+          )}
+          {message.isStreaming && (
+            <div className="flex items-center space-x-2 text-gray-500 dark:text-gray-400 text-sm mt-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              <span>
+                {message.streamingState?.currentTool 
+                  ? `Processing ${message.streamingState.currentTool}...`
+                  : message.streamingState?.isLoadingData 
+                    ? 'Loading data...'
+                    : 'Generating response...'
+                }
+              </span>
+              {message.streamingState?.progressInfo && (
+                <span className="text-xs text-blue-500 dark:text-blue-400">
+                  ({message.streamingState.progressInfo})
+                </span>
+              )}
+            </div>
+          )}
         </div>
       );
     };

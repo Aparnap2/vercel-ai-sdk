@@ -6,6 +6,7 @@ import { databaseQueryTool } from '../../../lib/tools/database';
 import { userCardTool, productCardTool, orderCardTool, supportTicketCardTool } from '../../../lib/tools/ui-components';
 import { nanoid } from 'nanoid';
 import ServerCardWrapper from '../../components/ServerCardWrapper';
+import React from 'react';
 
 // Enhanced logger utility
 const logger = {
@@ -20,16 +21,21 @@ const logger = {
       stack: error.stack,
       ...(error.cause && { cause: error.cause })
     } : null;
-    console.error(`[${timestamp}] [ERROR] ${message}`, {
+    // Use console.error for proper error stream handling in production environments
+    console.error(`[${timestamp}] [ERROR] ${message}`, JSON.stringify({
       ...data,
       ...(errorDetails && { error: errorDetails })
-    });
+    }, null, 2));
   },
   debug: (message, data = {}) => {
     if (process.env.NODE_ENV !== 'production') {
       const timestamp = new Date().toISOString();
       console.debug(`[${timestamp}] [DEBUG] ${message}`, JSON.stringify(data, null, 2));
     }
+  },
+  warn: (message, data = {}) => {
+    const timestamp = new Date().toISOString();
+    console.warn(`[${timestamp}] [WARN] ${message}`, JSON.stringify(data, null, 2));
   },
   api: (endpoint, data = {}) => {
     const timestamp = new Date().toISOString();
@@ -39,8 +45,9 @@ const logger = {
 
 // Ensure GOOGLE_GENERATIVE_AI_API_KEY is available
 if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-  console.error('[API_ROUTE] Missing GOOGLE_GENERATIVE_AI_API_KEY');
-  throw new Error('Missing GOOGLE_GENERATIVE_AI_API_KEY environment variable');
+  const errorMessage = 'Missing GOOGLE_GENERATIVE_AI_API_KEY environment variable';
+  logger.error(errorMessage);
+  throw new Error(errorMessage);
 }
 
 // Generate UI components using enhanced UI component tools
@@ -223,7 +230,6 @@ export async function POST(req) {
       url: req.url,
       clientIP: clientIP.substring(0, 8) + '***', // Partially redact IP for logging
       rateLimitRemaining: rateLimitResult.remaining,
-      // Remove sensitive headers from logging
       headers: {
         'content-type': req.headers.get('content-type'),
         'user-agent': req.headers.get('user-agent')?.substring(0, 50) + '...',
@@ -258,662 +264,486 @@ export async function POST(req) {
       lastMessage: messages[messages.length - 1] 
     });
 
-    // Handle simple greetings without LLM
+    // Handle simple greetings without LLM for efficiency
     const lastMessage = messages[messages.length - 1];
     if (lastMessage?.role === 'user') {
       const lowerContent = lastMessage.content.toLowerCase().trim();
       
       logger.debug('Checking for greeting', { ...logContext, content: lowerContent });
-      if (lowerContent === 'hi' || lowerContent === 'hello') {
-        logger.info('Handling greeting', { ...logContext, content: lowerContent });
-        logger.debug('Returning greeting response', { ...logContext });
-        return new Response(JSON.stringify({
-          text: 'Hello! How can I assist you with your orders, products, or support tickets today?'
-        }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
+      if (['hi', 'hello'].includes(lowerContent)) {
+        logger.info('Handling simple greeting', { ...logContext, content: lowerContent });
+        
+        // For simple greetings, we need to return a properly formatted streaming response
+        // that the frontend can understand
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          async start(controller) {
+            const message = 'Hello! How can I assist you with your orders, products, or support tickets today?';
+            logger.debug('Sending greeting response', { ...logContext, message });
+            
+            // Send the message in the format expected by the frontend
+            controller.enqueue(encoder.encode(`0:"${message}"\n`));
+            controller.close();
+          },
+        });
+        
+        logger.debug('Returning greeting stream response', { ...logContext });
+        return new Response(stream, {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
         });
       }
     }
 
     logger.info('Generating response with tools', { ...logContext });
     
-    try {
-      // Format messages if needed
-      const formattedMessages = messages.map((msg, index) => {
-        logger.debug(`Processing message ${index}`, { ...logContext, message: msg });
-        if (msg.role === 'user' && msg.content) {
-          // Normalize the message content first (replace common typos in emails)
-          const normalizedContent = msg.content
-            // Fix comma instead of period in email
-            .replace(/([a-zA-Z0-9._-]+)@([a-zA-Z0-9_-]+),([a-zA-Z]{2,})/g, '$1@$2.$3')
-            // Ensure single space after commas
-            .replace(/\s*,\s*/g, ', ');
-
-          // Extract email from the normalized message
-          const emailMatch = normalizedContent.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/i);
-          
-          if (emailMatch) {
-            const email = emailMatch[0];
-            const content = normalizedContent.toLowerCase();
-            
-            // Check if it's asking for orders
-            if (content.includes('order')) {
-              return {
-                ...msg,
-                content: `Find orders for email: ${email}`
-              };
-            }
-            // Check if it's asking for customer info
-            else if (content.includes('customer') || content.includes('info') || content.includes('details')) {
-              return {
-                ...msg,
-                content: `Find customer with email: ${email}`
-              };
-            }
-            // Default to order search if no specific type mentioned
-            return {
-              ...msg,
-              content: `Find orders for email: ${email}`
-            };
-          }
-        }
-        return msg;
-      });
-
-      // Enhanced email extraction function with improved validation
-      function extractEmailFromMessages(messages) {
-        // Enhanced email regex pattern for better matching and validation
-        const EMAIL_REGEX = /\b[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}\b/gi;
-        
-        for (const message of messages.reverse()) {
-          if (message.role === 'user' && message.content) {
-            // Normalize the message content (fix common typos and formatting issues)
-            const normalizedContent = message.content
-              // Fix comma instead of period in email domains
-              .replace(/([a-zA-Z0-9._-]+)@([a-zA-Z0-9_-]+),([a-zA-Z]{2,})/g, '$1@$2.$3')
-              // Fix space in email addresses
-              .replace(/([a-zA-Z0-9._-]+)\s*@\s*([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, '$1@$2')
-              // Fix missing dots in common domains
-              .replace(/@(gmail|yahoo|hotmail|outlook)([a-zA-Z]{2,})/g, '@$1.$2')
-              // Ensure single space after commas
-              .replace(/\s*,\s*/g, ', ');
-
-            // Find all potential email matches
-            const emailMatches = normalizedContent.match(EMAIL_REGEX);
-            
-            if (emailMatches && emailMatches.length > 0) {
-              // Validate and return the first valid email
-              for (const emailMatch of emailMatches) {
-                const email = emailMatch.toLowerCase().trim();
-                
-                // Additional validation checks
-                if (isValidEmailAddress(email)) {
-                  logger.debug('Valid email extracted from message', { 
-                    ...logContext, 
-                    email: email.substring(0, 3) + '***@' + email.split('@')[1], // Partially redact for logging
-                    originalContent: message.content.substring(0, 100) + '...'
-                  });
-                  return email;
-                }
-              }
+    // Enhanced email extraction function with improved validation
+function extractEmailFromMessages(messages) {
+  // More precise email regex that requires word boundaries
+  const EMAIL_REGEX = /\b[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,6}\b/g;
+  
+  for (const message of messages.slice().reverse()) {
+    if (message.role === 'user' && message.content) {
+      // Find all email matches
+      const emailMatches = message.content.match(EMAIL_REGEX);
+      if (emailMatches) {
+        // Process each match and return the first valid one
+        for (const emailMatch of emailMatches) {
+          const email = emailMatch.toLowerCase().trim();
+          // Additional validation to ensure it's a proper email
+          if (isValidEmailAddress(email) && email.includes('.') && email.split('@').length === 2) {
+            const [localPart, domain] = email.split('@');
+            // Ensure both parts are reasonable lengths
+            if (localPart.length >= 1 && localPart.length <= 64 && 
+                domain.length >= 4 && domain.length <= 255 &&
+                domain.includes('.')) {
+              logger.debug('Valid email extracted from message', { 
+                ...logContext, 
+                email: email.substring(0, 3) + '***@' + email.split('@')[1],
+                originalContent: message.content.substring(0, 100) + '...'
+              });
+              return email;
             }
           }
         }
-        return null;
       }
+    }
+  }
+  return null;
+}
 
-      // Enhanced email validation function
-      function isValidEmailAddress(email) {
-        if (!email || typeof email !== 'string') return false;
-        
-        // Basic format check
-        const basicEmailRegex = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$/;
-        if (!basicEmailRegex.test(email)) return false;
-        
-        // Additional validation rules
-        const parts = email.split('@');
-        if (parts.length !== 2) return false;
-        
-        const [localPart, domainPart] = parts;
-        
-        // Local part validation
-        if (localPart.length === 0 || localPart.length > 64) return false;
-        if (localPart.startsWith('.') || localPart.endsWith('.')) return false;
-        if (localPart.includes('..')) return false;
-        
-        // Domain part validation
-        if (domainPart.length === 0 || domainPart.length > 255) return false;
-        if (domainPart.startsWith('.') || domainPart.endsWith('.')) return false;
-        if (domainPart.startsWith('-') || domainPart.endsWith('-')) return false;
-        if (domainPart.includes('..')) return false;
-        
-        // Check for valid TLD
-        const tldPart = domainPart.split('.').pop();
-        if (!tldPart || tldPart.length < 2) return false;
-        
-        return true;
-      }
-
-      // Extract email from messages for security
-      const userEmail = extractEmailFromMessages([...messages]);
+    // Enhanced email validation function
+    function isValidEmailAddress(email) {
+      if (!email || typeof email !== 'string') return false;
+      const basicEmailRegex = /^[a-zA-Z0-9](?:[a-zA-Z0-9._-]*[a-zA-Z0-9])?@[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\.[a-zA-Z]{2,}$/;
+      if (!basicEmailRegex.test(email)) return false;
       
-      if (!userEmail) {
-        logger.warn('No email found in messages', { ...logContext });
-        return new Response(JSON.stringify({
-          text: 'Please provide your email address to access your personal data. For example: "Show my orders for john@example.com"',
-          requestId
-        }), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' }
-        });
-      }
-
-      // Create a simplified version of the tool that matches the expected parameter structure
-      const simplifiedTool = {
-        description: 'Query the database for customers, products, orders, or support tickets with email-based security.',
-        parameters: z.object({
-          type: z.enum(['customer', 'product', 'order', 'ticket']).describe('Type of data to query'),
-          query: z.string().describe('Search query or identifier (ID or other relevant information)')
-        }),
-        execute: async (params) => {
-          const toolCallId = nanoid();
-          const toolLogContext = { ...logContext, toolCallId };
-          
-          logger.info('Executing database query', { 
-            ...toolLogContext, 
-            params,
-            userEmail
-          });
-          
-          try {
-            // Ensure params is an object
-            const safeParams = params || {};
-            
-            // Extract type and query with validation
-            const type = (safeParams.type || 'order').toLowerCase();
-            const query = safeParams.query || '';
-            
-            logger.debug('Query parameters validated', { 
-              ...toolLogContext, 
-              type, 
-              query,
-              userEmail
-            });
-            
-            // Parse identifiers from query if needed
-            let identifiers = [];
-            if (query) {
-              // Check for order ID
-              const orderIdMatch = query.match(/order[#\s]*(\d+)/i);
-              if (orderIdMatch) {
-                identifiers.push({ orderId: orderIdMatch[1] });
-              }
-              
-              // Check for ticket ID
-              const ticketIdMatch = query.match(/ticket[#\s]*(\d+)/i);
-              if (ticketIdMatch) {
-                identifiers.push({ ticketId: ticketIdMatch[1] });
-              }
-              
-              // Check for product ID
-              const productIdMatch = query.match(/product[#\s]*(\d+)/i);
-              if (productIdMatch) {
-                identifiers.push({ productId: productIdMatch[1] });
-              }
-            }
-            
-            // Call the database query tool with the correct parameter structure including email
-            const startTime = Date.now();
-            const result = await databaseQueryTool.execute({ 
-              type, 
-              email: userEmail,
-              identifiers: identifiers.length > 0 ? identifiers : undefined
-            });
-            const duration = Date.now() - startTime;
-            
-            logger.info('Database query completed', {
-              ...toolLogContext,
-              durationMs: duration,
-              resultType: result?.type,
-              resultSummary: result?.summary,
-              hasData: Array.isArray(result?.data) ? result.data.length : 0
-            });
-            
-            return result;
-          } catch (error) {
-            logger.error('Database query failed', error, {
-              ...toolLogContext,
-              errorType: error.name,
-              stack: error.stack
-            });
-            
-            return {
-              type: 'error',
-              data: [],
-              llm_formatted_data: `Error: ${error.message}`,
-              error: error.message,
-              requestId
-            };
-          }
-        }
-      };
-
-      // Log the model request
-      const modelRequest = {
-        model: 'gemini-2.0-flash',
-        messageCount: formattedMessages.length,
-        hasTools: true,
-        temperature: 0.2
-      };
+      const [localPart, domainPart] = email.split('@');
+      if (localPart.length > 64 || domainPart.length > 255) return false;
+      if (localPart.startsWith('.') || localPart.endsWith('.') || localPart.includes('..')) return false;
+      if (domainPart.startsWith('.') || domainPart.endsWith('.') || domainPart.startsWith('-') || domainPart.endsWith('-') || domainPart.includes('..')) return false;
       
-      logger.info('Sending request to Gemini model', {
-        ...logContext,
-        ...modelRequest
+      const tldPart = domainPart.split('.').pop();
+      return tldPart && tldPart.length >= 2;
+    }
+
+    // Extract email from messages for security and context.
+    const userEmail = extractEmailFromMessages(messages);
+    
+    if (!userEmail) {
+      logger.warn('No email found in messages. Prompting user.', { ...logContext });
+      
+      // Return properly formatted streaming response for email prompt
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          const message = 'Please provide your email address to access your personal data. For example: "Show my orders for john@example.com"';
+          logger.debug('Sending email prompt response', { ...logContext, message });
+          
+          controller.enqueue(encoder.encode(`0:"${message}"\n`));
+          controller.close();
+        },
       });
       
-      let modelStartTime = null;
-      try {
-        modelStartTime = Date.now();
-        let result;
-        let lastError;
-        const maxRetries = 2;
-        let attempt = 0;
-        
-        while (attempt <= maxRetries) {
-          attempt++;
-          lastError = null;
-        
-        try {
-          const model = google('gemini-1.5-flash');
-          logger.debug('Initialized Gemini model', { 
-            ...logContext, 
-            modelName: 'gemini-1.5-flash',
-            attempt,
-            maxRetries
-          });
-          
-          // Log the exact request being sent to the model
-          const requestPayload = {
-            system: SYSTEM_PROMPT,
-            messages: formattedMessages,
-            tools: { databaseQuery: { description: simplifiedTool.description } },
-            toolChoice: 'auto',
-            temperature: 0.2,
-            maxRetries: 0 // We handle retries ourselves
-          };
-          
-          logger.debug('Sending request to Gemini model', {
-            ...logContext,
-            attempt,
-            request: {
-              ...requestPayload,
-              messages: requestPayload.messages.map(m => ({
-                ...m,
-                content: m.content?.substring(0, 100) + (m.content?.length > 100 ? '...' : '')
-              }))
-            }
-          });
-          
-          result = await streamUI({
-            model,
-            ...requestPayload,
-            text: ({ content, done }) => {
-              if (done) {
-                logger.debug('Text generation completed', { ...logContext, contentLength: content.length });
-              }
-              return <div>{content}</div>;
-            },
-            tools: {
-              databaseQuery: {
-                description: simplifiedTool.description,
-                parameters: simplifiedTool.parameters,
-                generate: async function* ({ type, query }) {
-                  const toolCallId = nanoid();
-                  const toolLogContext = { ...logContext, toolCallId };
-                  
-                  logger.info('Executing database query via streamUI', { 
-                    ...toolLogContext, 
-                    type,
-                    query,
-                    userEmail
-                  });
-                  
-                  // Yield loading state
-                  yield <ServerCardWrapper type={type} loading={true} />;
-                  
-                  try {
-                    // Execute the database query
-                    const result = await simplifiedTool.execute({ type, query });
-                    
-                    logger.info('Database query completed via streamUI', {
-                      ...toolLogContext,
-                      resultType: result?.type,
-                      resultSummary: result?.summary,
-                      hasData: Array.isArray(result?.data) ? result.data.length : 0
-                    });
-                    
-                    // Handle error results
-                    if (result.error) {
-                      yield <ServerCardWrapper 
-                        type={type} 
-                        error={new Error(result.message)} 
-                        data={result.data}
-                        fallbackToMarkdown={true}
-                      />;
-                      return result;
-                    }
-                    
-                    // Handle successful results with data
-                    if (result.data && result.data.length > 0) {
-                      // Generate UI components for each data item using enhanced UI tools
-                      try {
-                        const uiResult = await generateUIComponents(type, result.data, userEmail, toolLogContext);
-                        if (uiResult && uiResult.components) {
-                          for (const component of uiResult.components) {
-                            yield <ServerCardWrapper {...component.props} />;
-                          }
-                        } else {
-                          // Fallback to direct ServerCardWrapper usage
-                          for (const item of result.data) {
-                            yield <ServerCardWrapper 
-                              type={type} 
-                              data={item}
-                              loading={false}
-                              fallbackToMarkdown={true}
-                            />;
-                          }
-                        }
-                      } catch (uiError) {
-                        logger.warn('UI component generation failed, using fallback', uiError, toolLogContext);
-                        // Fallback to direct ServerCardWrapper usage
-                        for (const item of result.data) {
-                          yield <ServerCardWrapper 
-                            type={type} 
-                            data={item}
-                            loading={false}
-                            fallbackToMarkdown={true}
-                          />;
-                        }
-                      }
-                    } else {
-                      // No data found
-                      yield <ServerCardWrapper 
-                        type={type} 
-                        data={null}
-                        loading={false}
-                        fallbackToMarkdown={true}
-                      />;
-                    }
-                    
-                    return result;
-                  } catch (error) {
-                    logger.error('Database query failed via streamUI', error, {
-                      ...toolLogContext,
-                      errorType: error.name,
-                      stack: error.stack
-                    });
-                    
-                    // Yield error state
-                    yield <ServerCardWrapper 
-                      type={type} 
-                      error={error}
-                      data={null}
-                      fallbackToMarkdown={true}
-                    />;
-                    
-                    return {
-                      type: 'error',
-                      data: [],
-                      llm_formatted_data: `Error: ${error.message}`,
-                      error: error.message,
-                      requestId
-                    };
-                  }
-                }
-              }
-            }
-          });
-          
-          // If we got here, the request was successful
-          break;
-          
-        } catch (error) {
-          lastError = error;
-          const isLastAttempt = attempt >= maxRetries;
-          const delayMs = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
-          
-          logger.warn('Gemini API call failed', {
-            ...logContext,
-            attempt,
-            maxRetries,
-            error: {
-              name: error.name,
-              message: error.message,
-              code: error.code,
-              status: error.status,
-              ...(isLastAttempt ? { stack: error.stack } : {})
-            },
-            willRetry: !isLastAttempt,
-            delayMs: isLastAttempt ? 0 : delayMs
-          });
-          
-          if (isLastAttempt) {
-            throw error; // Rethrow on final attempt
-          }
-          
-          // Wait before retrying
-          await new Promise(resolve => setTimeout(resolve, delayMs));
-        }
-      }
-        
-        const modelDuration = Date.now() - modelStartTime;
-        
-        // Log the raw response for debugging
-        logger.debug('Raw Gemini response', {
-          ...logContext,
-          response: result,
-          responseKeys: Object.keys(result)
-        });
-        
-        // Validate the response
-        if (!result || typeof result !== 'object') {
-          throw new Error('Invalid response format from Gemini API');
-        }
-        
-        logger.info('Received response from Gemini model', {
-          ...logContext,
-          durationMs: modelDuration,
-          hasText: !!result.text,
-          textLength: result.text?.length,
-          toolResultsCount: result.toolResults?.length || 0,
-          finishReason: result.finishReason || 'unknown',
-          hasToolCalls: result.toolResults?.some(tr => tr.toolCall)
-        });
-        
-        // If we have tool calls but no text, ensure we have a default response
-        if (result.toolResults?.length > 0 && !result.text) {
-          result.text = 'Processing your request...';
-        }
-        
-        logger.debug('Model response details', {
-          ...logContext,
-          result: {
-            textLength: result.text?.length,
-            toolResults: result.toolResults?.map(tr => ({
-              toolName: tr.toolName,
-              resultType: typeof tr.result,
-              resultKeys: tr.result ? Object.keys(tr.result) : []
-            }))
-          }
-        });
-      } catch (error) {
-        const modelDuration = Date.now() - modelStartTime;
-        logger.error('Model request failed', error, {
-          ...logContext,
-          durationMs: modelDuration,
-          errorType: error.name,
-          errorCode: error.code,
-          errorStatus: error.status
-        });
-        throw error;
-      }
-
-      // Format the response
-      let responseText = result.text || 'I couldn\'t find any information about that.';
-      let responseData = null;
-      
-      // Handle tool results if any
-      if (result.toolResults?.length > 0) {
-        logger.debug('Processing tool results', {
-          ...logContext,
-          toolResultsCount: result.toolResults.length,
-          toolResults: result.toolResults.map(tr => ({
-            toolName: tr.toolName,
-            toolCallId: tr.toolCallId,
-            resultType: typeof tr.result,
-            hasError: !!tr.result?.error
-          }))
-        });
-        
-        // Process each tool result
-        for (const toolResult of result.toolResults) {
-          const { result: toolResponse } = toolResult;
-          
-          if (!toolResponse) {
-            logger.warn('Empty tool response', {
-              ...logContext,
-              toolName: toolResult.toolName,
-              toolCallId: toolResult.toolCallId
-            });
-            continue;
-          }
-          
-          if (toolResponse.error) {
-            logger.warn('Tool execution resulted in error', {
-              ...logContext,
-              toolName: toolResult.toolName,
-              error: toolResponse.error,
-              hasFormattedData: !!toolResponse.llm_formatted_data,
-              hasSuggestion: !!toolResponse.suggestion
-            });
-            
-            responseText = `## Error\n${toolResponse.error}`;
-            
-            // Add more context if available
-            if (toolResponse.llm_formatted_data) {
-              responseText += `\n\n${toolResponse.llm_formatted_data}`;
-            }
-            
-            // Add suggestion if available
-            if (toolResponse.suggestion) {
-              responseText += `\n\n**Suggestion**: ${toolResponse.suggestion}`;
-            }
-          } 
-          // Handle successful tool execution with formatted data
-          else if (toolResponse.llm_formatted_data) {
-            logger.info('Tool execution successful with formatted data', {
-              ...logContext,
-              toolName: toolResult.toolName,
-              resultType: toolResponse.type,
-              dataLength: Array.isArray(toolResponse.data) ? toolResponse.data.length : null
-            });
-            
-            responseText = toolResponse.llm_formatted_data;
-            responseData = toolResponse.data;
-            
-            // If we have data but no formatted output, create a basic one
-            if (toolResponse.data && toolResponse.data.length > 0 && !toolResponse.llm_formatted_data) {
-              responseText = `## ${toolResponse.type ? `${toolResponse.type} Information` : 'Results'}\n`;
-              responseText += `Found ${toolResponse.data.length} result(s).`;
-            }
-          } 
-          // Fallback to raw data if no formatted data is available
-          else if (toolResponse.data) {
-            logger.debug('Falling back to raw data format', {
-              ...logContext,
-              toolName: toolResult.toolName,
-              dataType: typeof toolResponse.data,
-              isArray: Array.isArray(toolResponse.data)
-            });
-            
-            responseText = `## Raw Data\n\`\`\`json\n${JSON.stringify(toolResponse.data, null, 2)}\n\`\`\``;
-          }
-          
-          // Stop after processing the first tool result with content
-          if (responseText) {
-            break;
-          }
-        }
-      } else {
-        logger.debug('No tool results to process', { ...logContext });
-      }
-      
-      // If we still don't have any text, provide a fallback
-      if (!responseText) {
-        logger.warn('No response text generated, using fallback', { ...logContext });
-        responseText = 'I encountered an issue processing your request. Please try again.';
-      }
-
-      // Prepare the response object
-      const responseObj = {
-        text: responseText,
-        data: responseData || null,
-        ui_components: result.toolResults?.[0]?.result?.ui_components || [],
-        requestId
-      };
-
-      const responseHeaders = {
-        'Content-Type': 'application/json',
-        'Cache-Control': 'no-cache',
-        'X-Content-Type-Options': 'nosniff',
-        'X-Request-ID': requestId
-      };
-      
-      const response = new Response(JSON.stringify(responseObj), {
-        status: 200,
-        headers: responseHeaders
-      });
-      
-      const totalDuration = Date.now() - startTime;
-      logger.info('Sending response', {
-        ...logContext,
-        status: 200,
-        durationMs: totalDuration,
-        responseSize: JSON.stringify(responseObj).length,
-        hasData: !!responseData,
-        hasUIComponents: responseObj.ui_components.length > 0
-      });
-      
-      return response;
-    } catch (error) {
-      const errorDuration = Date.now() - startTime;
-      logger.error('Request processing failed', error, {
-        ...logContext,
-        durationMs: errorDuration,
-        errorType: error.name,
-        errorCode: error.code,
-        errorStatus: error.status,
-        stack: error.stack
-      });
-      
-      // Prepare error response
-      const errorResponse = {
-        error: 'An error occurred while processing your request',
-        requestId,
-        ...(process.env.NODE_ENV !== 'production' && {
-          details: error.message,
-          ...(error.stack && { stack: error.stack.split('\n') })
-        })
-      };
-      
-      return new Response(JSON.stringify(errorResponse), {
-        status: 500,
+      return new Response(stream, {
         headers: {
-          'Content-Type': 'application/json',
-          'X-Request-ID': requestId
-        }
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
       });
     }
+
+    // Enhanced tool for streamUI with React Server Components and progressive loading
+    const databaseQuery = {
+      description: 'Query the database for customers, products, orders, or support tickets. Requires an email for authorization. Supports progressive loading and real-time updates.',
+      parameters: z.object({
+        type: z.enum(['customer', 'product', 'order', 'ticket']).describe('Type of data to query'),
+        query: z.string().describe('Search query, ID, or other relevant information. The user email is used for authorization.')
+      }),
+      generate: async function* ({ type, query }) {
+        const toolCallId = nanoid();
+        const toolLogContext = { ...logContext, toolCallId };
+        
+        logger.info('Executing enhanced database query via streamUI', { 
+          ...toolLogContext, 
+          type,
+          query,
+          userEmail: '[REDACTED]'
+        });
+        
+        try {
+          // Yield initial loading state with enhanced skeleton
+          yield (
+            <div className="space-y-4">
+              <div className="flex items-center space-x-2 text-blue-600 dark:text-blue-400 text-sm">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+                <span>Searching {type} data...</span>
+              </div>
+              <ServerCardWrapper 
+                type={type} 
+                data={null} 
+                loading={true} 
+                fallbackToMarkdown={true} 
+              />
+            </div>
+          );
+          
+          // Parse identifiers from query with enhanced pattern matching
+          let identifiers = [];
+          if (query) {
+            // Enhanced regex patterns for better ID extraction
+            const patterns = {
+              order: /(?:order|ord)[#\s]*(\d+)/i,
+              ticket: /(?:ticket|tkt|support)[#\s]*(\d+)/i,
+              product: /(?:product|prod|item)[#\s]*(\d+)/i,
+              customer: /(?:customer|user|cust)[#\s]*(\d+)/i
+            };
+            
+            for (const [key, pattern] of Object.entries(patterns)) {
+              const match = query.match(pattern);
+              if (match) {
+                identifiers.push({ [`${key}Id`]: match[1] });
+              }
+            }
+          }
+          
+          // Call the database query tool with enhanced parameters
+          const startTime = Date.now();
+          const result = await databaseQueryTool.execute({ 
+            type, 
+            email: userEmail,
+            identifiers: identifiers.length > 0 ? identifiers : undefined,
+            query: query // Pass the full query for better context
+          });
+          const duration = Date.now() - startTime;
+          
+          logger.info('Enhanced database query completed', {
+            ...toolLogContext,
+            durationMs: duration,
+            resultType: result?.type,
+            hasData: Array.isArray(result?.data) ? result.data.length : 0,
+            identifiersFound: identifiers.length
+          });
+          
+          // Handle error results with enhanced error UI
+          if (result.error) {
+            return (
+              <div className="max-w-md mx-auto p-4 border border-red-200 rounded-lg bg-red-50 dark:bg-red-900/20 shadow-sm">
+                <div className="flex items-start space-x-3">
+                  <div className="flex-shrink-0">
+                    <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                    </svg>
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-sm font-medium text-red-800 dark:text-red-200">
+                      Unable to load {type} data
+                    </h3>
+                    <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+                      {result.message || 'An error occurred while fetching your data. Please try again.'}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          
+          // Handle successful results with enhanced UI and progressive loading
+          if (result.data && result.data.length > 0) {
+            // Yield success indicator first
+            yield (
+              <div className="flex items-center space-x-2 text-green-600 dark:text-green-400 text-sm mb-4">
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span>Found {result.data.length} {type}{result.data.length !== 1 ? 's' : ''}</span>
+              </div>
+            );
+            
+            // Progressive loading: yield components one by one for better UX
+            const components = [];
+            for (let i = 0; i < result.data.length; i++) {
+              const item = result.data[i];
+              components.push(
+                <ServerCardWrapper 
+                  key={`${type}-${item.id || i}`}
+                  type={type} 
+                  data={item} 
+                  loading={false} 
+                  fallbackToMarkdown={true}
+                  className="animate-in slide-in-from-bottom-2 duration-300"
+                />
+              );
+              
+              // Yield progressive updates for better perceived performance
+              if (i < 3 || i % 2 === 0) { // Show first 3 immediately, then every other one
+                yield (
+                  <div className="space-y-4">
+                    <div className="flex items-center space-x-2 text-green-600 dark:text-green-400 text-sm">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      <span>Found {result.data.length} {type}{result.data.length !== 1 ? 's' : ''}</span>
+                    </div>
+                    {components.slice(0, i + 1)}
+                    {i < result.data.length - 1 && (
+                      <div className="flex items-center space-x-2 text-blue-500 dark:text-blue-400 text-sm">
+                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-500"></div>
+                        <span>Loading more...</span>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+            }
+            
+            // Final result with all components
+            return (
+              <div className="space-y-4">
+                <div className="flex items-center space-x-2 text-green-600 dark:text-green-400 text-sm">
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span>Found {result.data.length} {type}{result.data.length !== 1 ? 's' : ''}</span>
+                </div>
+                {components}
+              </div>
+            );
+          } else {
+            // Enhanced no data found UI
+            return (
+              <div className="max-w-md mx-auto p-6 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 shadow-sm">
+                <div className="text-center">
+                  <svg className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-gray-100">
+                    No {type} data found
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    We couldn't find any {type} records for your account.
+                  </p>
+                  {query && (
+                    <p className="mt-2 text-xs text-gray-400 dark:text-gray-500">
+                      Search query: "{query}"
+                    </p>
+                  )}
+                </div>
+              </div>
+            );
+          }
+        } catch (error) {
+          logger.error('Enhanced database query failed via streamUI', error, {
+            ...toolLogContext,
+            errorType: error.name,
+            errorStack: error.stack
+          });
+          
+          // Enhanced error component with retry functionality
+          return (
+            <div className="max-w-md mx-auto p-4 border border-red-200 rounded-lg bg-red-50 dark:bg-red-900/20 shadow-sm">
+              <div className="flex items-start space-x-3">
+                <div className="flex-shrink-0">
+                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-sm font-medium text-red-800 dark:text-red-200">
+                    Query Failed
+                  </h3>
+                  <p className="mt-1 text-sm text-red-600 dark:text-red-400">
+                    {error.message || 'An unexpected error occurred while processing your request.'}
+                  </p>
+                  <div className="mt-3">
+                    <button 
+                      onClick={() => window.location.reload()} 
+                      className="text-xs text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 underline"
+                    >
+                      Try refreshing the page
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+      }
+    };
+
+    // Log the model request
+    logger.info('Sending request to Gemini model', {
+      ...logContext,
+      model: 'gemini-1.5-flash',
+      hasTools: true,
+      temperature: 0.2
+    });
+    
+    let lastError;
+    const maxRetries = 2;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        // Use the latest available Gemini model with enhanced capabilities
+        // Default to gemini-1.5-flash but allow for environment variable override
+        const modelId = process.env.GOOGLE_MODEL_ID || 'gemini-1.5-flash';
+        
+        // Create model with advanced settings
+        const model = google(modelId, {
+          // Add safety settings to moderate content, as per best practices.
+          safetySettings: [
+            { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+            { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+            { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+            { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_MEDIUM_AND_ABOVE' },
+          ],
+          // Enable structured outputs for tool calling
+          structuredOutputs: true,
+          
+          // Conditionally enable search grounding for specific queries that might benefit from updated information
+          useSearchGrounding: lastMessage?.content?.toLowerCase().includes('latest') || 
+                             lastMessage?.content?.toLowerCase().includes('recent') ||
+                             lastMessage?.content?.toLowerCase().includes('news') || 
+                             false,
+        });
+        
+        logger.debug('Calling streamUI with tools', {
+          ...logContext,
+          hasTools: !!{ databaseQuery },
+          toolsCount: Object.keys({ databaseQuery }).length
+        });
+
+        const result = await streamUI({
+          model,
+          system: SYSTEM_PROMPT,
+          messages,
+          tools: { databaseQuery },
+          toolChoice: 'auto',
+          temperature: 0.2,
+          maxRetries: 0 // Handle retries manually
+        });
+
+        logger.debug('StreamUI call completed', {
+          ...logContext,
+          resultType: typeof result,
+          hasResult: !!result
+        });
+        
+        const totalDuration = Date.now() - startTime;
+        logger.info('Stream response initiated successfully', {
+          ...logContext,
+          durationMs: totalDuration,
+          attempt,
+          modelId
+        });
+
+        // Log the result type for debugging
+        logger.debug('StreamUI result type', {
+          ...logContext,
+          resultType: typeof result,
+          hasToDataStreamResponse: typeof result.toDataStreamResponse === 'function',
+          resultKeys: Object.keys(result || {})
+        });
+
+        // Convert to proper streaming response for React Server Components
+        try {
+          const response = result.toDataStreamResponse();
+          logger.info('Successfully created streamUI data stream response', {
+            ...logContext,
+            responseType: typeof response,
+            isResponse: response instanceof Response
+          });
+          return response;
+        } catch (streamError) {
+          logger.error('Failed to create streamUI data stream response', streamError, {
+            ...logContext,
+            errorType: streamError.name,
+            errorMessage: streamError.message
+          });
+          throw streamError;
+        }
+
+      } catch (error) {
+        lastError = error;
+        const isLastAttempt = attempt >= maxRetries;
+        const delayMs = Math.min(1000 * Math.pow(2, attempt), 5000);
+        
+        logger.warn('Gemini API call failed', {
+          ...logContext,
+          attempt,
+          maxRetries,
+          error: {
+            name: error.name,
+            message: error.message,
+            code: error.code,
+            status: error.status,
+          },
+          willRetry: !isLastAttempt,
+          delayMs: isLastAttempt ? 0 : delayMs
+        });
+        
+        if (isLastAttempt) {
+          throw error; // Rethrow on final attempt
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+    
+    // This part should not be reached if retries are configured correctly
+    throw lastError || new Error('Failed to get a response from the model after multiple attempts.');
+
+  } catch (error) {
+    const errorDuration = Date.now() - startTime;
+    logger.error('Request processing failed', error, {
+      ...logContext,
+      durationMs: errorDuration,
+      errorType: error.name,
+      errorCode: error.code,
+      errorStatus: error.status,
+      stack: error.stack
+    });
+    
+    // Prepare error response
+    const errorResponse = {
+      error: 'An error occurred while processing your request',
+      requestId,
+      ...(process.env.NODE_ENV !== 'production' && {
+        details: error.message,
+        ...(error.stack && { stack: error.stack.split('\n') })
+      })
+    };
+    
+    return new Response(JSON.stringify(errorResponse), {
+      status: 500,
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Request-ID': requestId
+      }
+    });
   }
 }

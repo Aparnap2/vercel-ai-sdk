@@ -4,6 +4,7 @@ import UserCard from './UserCard';
 import OrderCard from './OrderCard';
 import ProductCard from './ProductCard';
 import TicketCard from './TicketCard';
+import { EnhancedCardSkeleton, StreamingStatusIndicator } from './LoadingComponents';
 
 // Loading skeleton component that matches card layouts
 function CardSkeleton({ type = 'default' }) {
@@ -248,7 +249,8 @@ export default function ServerCardWrapper({
   loading = false, 
   error = null,
   className = '',
-  fallbackToMarkdown = true 
+  fallbackToMarkdown = true,
+  streamingState = null
 }) {
   // Validate required props
   if (!type) {
@@ -256,9 +258,25 @@ export default function ServerCardWrapper({
     return null;
   }
 
-  // Handle loading state
+  // Handle loading state with enhanced streaming info
   if (loading) {
-    return <CardSkeleton type={type} />;
+    return (
+      <div className="space-y-2">
+        {streamingState?.currentTool && (
+          <StreamingStatusIndicator 
+            status="processing" 
+            toolType={streamingState.currentTool}
+            className="mb-2"
+          />
+        )}
+        <EnhancedCardSkeleton 
+          type={type} 
+          showProgress={!!streamingState}
+          progressText={streamingState?.progressInfo}
+          streamingState={streamingState}
+        />
+      </div>
+    );
   }
 
   // Handle error state
@@ -308,7 +326,7 @@ export default function ServerCardWrapper({
           console.error(`ServerCardWrapper error boundary caught error for ${type}:`, error, errorInfo);
         }}
       >
-        <Suspense fallback={<CardSkeleton type={type} />}>
+        <Suspense fallback={<EnhancedCardSkeleton type={type} streamingState={streamingState} />}>
           <Component {...{ [type === 'customer' ? 'user' : type]: data }} />
         </Suspense>
       </ErrorBoundary>

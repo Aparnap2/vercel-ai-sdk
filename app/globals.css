@@ -24,3 +24,205 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Enhanced animations for streaming UI */
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+@keyframes wave {
+  0%, 100% {
+    background-position: 200% 0;
+  }
+  50% {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes slideInFromBottom {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeInScale {
+  0% {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes pulse-soft {
+  0%, 100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* Utility classes for enhanced animations */
+.animate-shimmer {
+  animation: shimmer 2s infinite;
+}
+
+.animate-wave {
+  animation: wave 1.5s ease-in-out infinite;
+}
+
+.animate-slide-in-bottom {
+  animation: slideInFromBottom 0.3s ease-out;
+}
+
+.animate-fade-in-scale {
+  animation: fadeInScale 0.2s ease-out;
+}
+
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+/* Enhanced loading states */
+.loading-skeleton {
+  background: linear-gradient(90deg, 
+    rgba(229, 231, 235, 0.4) 25%, 
+    rgba(229, 231, 235, 0.8) 50%, 
+    rgba(229, 231, 235, 0.4) 75%
+  );
+  background-size: 200% 100%;
+  animation: wave 1.5s ease-in-out infinite;
+}
+
+.dark .loading-skeleton {
+  background: linear-gradient(90deg, 
+    rgba(55, 65, 81, 0.4) 25%, 
+    rgba(55, 65, 81, 0.8) 50%, 
+    rgba(55, 65, 81, 0.4) 75%
+  );
+}
+
+/* Streaming indicator styles */
+.streaming-dots {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.streaming-dots > div {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: currentColor;
+  animation: pulse-soft 1.4s ease-in-out infinite;
+}
+
+.streaming-dots > div:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.streaming-dots > div:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+/* Enhanced card transitions */
+.card-enter {
+  opacity: 0;
+  transform: translateY(10px) scale(0.98);
+}
+
+.card-enter-active {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transition: all 0.3s ease-out;
+}
+
+.card-exit {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.card-exit-active {
+  opacity: 0;
+  transform: translateY(-10px) scale(0.98);
+  transition: all 0.2s ease-in;
+}
+
+/* Progress bar animations */
+.progress-bar {
+  transition: width 0.3s ease-out;
+}
+
+.progress-bar-indeterminate {
+  background: linear-gradient(90deg, 
+    transparent, 
+    rgba(59, 130, 246, 0.5), 
+    transparent
+  );
+  background-size: 200% 100%;
+  animation: wave 1.5s ease-in-out infinite;
+}
+
+/* Status indicator styles */
+.status-indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status-indicator::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: currentColor;
+  opacity: 0.3;
+  animation: pulse-soft 2s ease-in-out infinite;
+}
+
+.status-indicator.status-active::before {
+  background-color: #10b981;
+}
+
+.status-indicator.status-processing::before {
+  background-color: #f59e0b;
+}
+
+.status-indicator.status-error::before {
+  background-color: #ef4444;
+}
+
+/* Smooth scrolling for message updates */
+.messages-container {
+  scroll-behavior: smooth;
+}
+
+/* Enhanced focus states for accessibility */
+.focus-enhanced:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Loading overlay */
+.loading-overlay {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(2px);
+}
+
+.dark .loading-overlay {
+  background: rgba(0, 0, 0, 0.8);
+}
